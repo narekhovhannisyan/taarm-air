@@ -10,20 +10,37 @@ import {
   Text,
   View,
 } from 'react-native';
-import { BleError, BleManager, Characteristic, Device, State } from 'react-native-ble-plx';
-import {
-  DEVICE_NAME,
-  UUIDS,
-  decodeFloatLE,
-  decodeUint16LE,
-  decodeUint8,
-  encodeFloatLE,
-  encodeUint8,
-} from './src/ble';
+import type { BleError, Characteristic, Device, State as BleState } from 'react-native-ble-plx';
+import { DEVICE_NAME, UUIDS, decodeFloatLE, decodeUint16LE, decodeUint8, encodeFloatLE, encodeUint8 } from './src/ble';
 
-const manager = new BleManager();
+const isWeb = Platform.OS === 'web';
 
 type ConnState = 'idle' | 'scanning' | 'connecting' | 'connected' | 'error';
+
+type BleManagerLike = {
+  state: () => Promise<BleState>;
+  startDeviceScan: (
+    uuids: null,
+    options: { allowDuplicates: boolean },
+    listener: (error: BleError | null, device: Device | null) => void,
+  ) => void;
+  stopDeviceScan: () => void;
+  destroy: () => void;
+};
+
+let bleManager: BleManagerLike | null = null;
+
+function getBleManager(): BleManagerLike {
+  if (isWeb) {
+    throw new Error('BLE is not available on web');
+  }
+  if (!bleManager) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { BleManager } = require('react-native-ble-plx') as typeof import('react-native-ble-plx');
+    bleManager = new BleManager();
+  }
+  return bleManager;
+}
 
 async function requestBlePermissions(): Promise<boolean> {
   if (Platform.OS !== 'android') {
@@ -43,6 +60,12 @@ async function requestBlePermissions(): Promise<boolean> {
   return result === PermissionsAndroid.RESULTS.GRANTED;
 }
 
+function autoDutyFromTemp(temp: number, setpoint: number): number {
+  const error = temp - setpoint;
+  if (error <= 0) return 20;
+  return Math.min(100, Math.round(20 + error * 12));
+}
+
 export default function App() {
   const [conn, setConn] = useState<ConnState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -51,13 +74,17 @@ export default function App() {
   const [mode, setMode] = useState<0 | 1>(0);
   const [fanDuty, setFanDuty] = useState(50);
   const [rpm, setRpm] = useState(0);
+  const [demo, setDemo] = useState(isWeb);
   const deviceRef = useRef<Device | null>(null);
   const subsRef = useRef<{ remove: () => void }[]>([]);
+  const demoTempRef = useRef(31.2);
 
   const cleanup = useCallback(async () => {
     subsRef.current.forEach((s) => s.remove());
     subsRef.current = [];
-    manager.stopDeviceScan();
+    if (!isWeb && bleManager) {
+      bleManager.stopDeviceScan();
+    }
     if (deviceRef.current) {
       try {
         await deviceRef.current.cancelConnection();
@@ -71,29 +98,66 @@ export default function App() {
   useEffect(() => {
     return () => {
       void cleanup();
-      manager.destroy();
+      if (bleManager) {
+        bleManager.destroy();
+        bleManager = null;
+      }
     };
   }, [cleanup]);
 
-  const onTempNotify = (error: BleError | null, c: Characteristic | null) => {
-    if (error || !c) return;
+  // Demo loop: drift temperature toward setpoint and update fan/rpm
+  useEffect(() => {
+    if (!demo || conn !== 'connected') return;
+
+    const id = setInterval(() => {
+      const current = demoTempRef.current;
+      const delta = mode === 0 ? (setpoint - current) * 0.08 : (28 - current) * 0.02;
+      const next = Math.round((current + delta + (Math.random() - 0.5) * 0.15) * 10) / 10;
+      demoTempRef.current = next;
+      setTemperature(next);
+
+      const duty = mode === 0 ? autoDutyFromTemp(next, setpoint) : fanDuty;
+      if (mode === 0) setFanDuty(duty);
+      setRpm(Math.round(duty * 18 + Math.random() * 40));
+    }, 800);
+
+    return () => clearInterval(id);
+  }, [demo, conn, mode, setpoint, fanDuty]);
+
+  const onTempNotify = (err: BleError | null, c: Characteristic | null) => {
+    if (err || !c) return;
     const v = decodeFloatLE(c.value);
     if (v !== null) setTemperature(v);
   };
 
-  const onDutyNotify = (error: BleError | null, c: Characteristic | null) => {
-    if (error || !c) return;
+  const onDutyNotify = (err: BleError | null, c: Characteristic | null) => {
+    if (err || !c) return;
     const v = decodeUint8(c.value);
     if (v !== null) setFanDuty(v);
   };
 
-  const onRpmNotify = (error: BleError | null, c: Characteristic | null) => {
-    if (error || !c) return;
+  const onRpmNotify = (err: BleError | null, c: Characteristic | null) => {
+    if (err || !c) return;
     const v = decodeUint16LE(c.value);
     if (v !== null) setRpm(v);
   };
 
+  const connectDemo = async () => {
+    setError(null);
+    setDemo(true);
+    setConn('connecting');
+    await new Promise((r) => setTimeout(r, 400));
+    demoTempRef.current = 31.2;
+    setTemperature(31.2);
+    setSetpoint(28);
+    setMode(0);
+    setFanDuty(autoDutyFromTemp(31.2, 28));
+    setRpm(520);
+    setConn('connected');
+  };
+
   const connectToDevice = async (device: Device) => {
+    setDemo(false);
     setConn('connecting');
     const connected = await device.connect();
     deviceRef.current = connected;
@@ -134,6 +198,11 @@ export default function App() {
   };
 
   const scanAndConnect = async () => {
+    if (isWeb) {
+      await connectDemo();
+      return;
+    }
+
     setError(null);
     const ok = await requestBlePermissions();
     if (!ok) {
@@ -142,14 +211,16 @@ export default function App() {
       return;
     }
 
+    const manager = getBleManager();
     const state = await manager.state();
-    if (state !== State.PoweredOn) {
+    if (state !== 'PoweredOn') {
       setError(`Bluetooth is ${state}. Turn it on and try again.`);
       setConn('error');
       return;
     }
 
     await cleanup();
+    setDemo(false);
     setConn('scanning');
 
     const timeout = setTimeout(() => {
@@ -182,6 +253,7 @@ export default function App() {
   const writeSetpoint = async (next: number) => {
     const clamped = Math.min(40, Math.max(15, Math.round(next * 10) / 10));
     setSetpoint(clamped);
+    if (demo) return;
     const device = deviceRef.current;
     if (!device) return;
     await device.writeCharacteristicWithResponseForService(
@@ -193,6 +265,7 @@ export default function App() {
 
   const writeMode = async (next: 0 | 1) => {
     setMode(next);
+    if (demo) return;
     const device = deviceRef.current;
     if (!device) return;
     await device.writeCharacteristicWithResponseForService(
@@ -205,6 +278,7 @@ export default function App() {
   const writeDuty = async (next: number) => {
     const clamped = Math.min(100, Math.max(0, Math.round(next)));
     setFanDuty(clamped);
+    if (demo) return;
     const device = deviceRef.current;
     if (!device || mode !== 1) return;
     await device.writeCharacteristicWithResponseForService(
@@ -221,7 +295,7 @@ export default function App() {
       <StatusBar style="dark" />
       <View style={styles.header}>
         <Text style={styles.brand}>taarm</Text>
-        <Text style={styles.subtitle}>Thermostat</Text>
+        <Text style={styles.subtitle}>Thermostat{demo && conn === 'connected' ? ' · demo' : ''}</Text>
       </View>
 
       <View style={styles.card}>
@@ -300,7 +374,16 @@ export default function App() {
 
       <View style={styles.footer}>
         {conn === 'connected' ? (
-          <Pressable style={styles.secondaryBtn} onPress={() => void cleanup().then(() => setConn('idle'))}>
+          <Pressable
+            style={styles.secondaryBtn}
+            onPress={() =>
+              void cleanup().then(() => {
+                setConn('idle');
+                setTemperature(null);
+                setRpm(0);
+              })
+            }
+          >
             <Text style={styles.secondaryText}>Disconnect</Text>
           </Pressable>
         ) : (
@@ -309,14 +392,25 @@ export default function App() {
               <ActivityIndicator color="#fff" />
             ) : (
               <Text style={styles.primaryText}>
-                {conn === 'error' ? 'Retry connect' : `Connect to ${DEVICE_NAME}`}
+                {conn === 'error'
+                  ? 'Retry connect'
+                  : isWeb
+                    ? 'Open demo UI'
+                    : `Connect to ${DEVICE_NAME}`}
               </Text>
             )}
           </Pressable>
         )}
+        {!isWeb && conn === 'idle' ? (
+          <Pressable style={styles.demoLink} onPress={() => void connectDemo()}>
+            <Text style={styles.demoLinkText}>Preview demo without BLE</Text>
+          </Pressable>
+        ) : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <Text style={styles.hint}>
-          Needs a development build (expo-dev-client). Expo Go cannot use BLE.
+          {isWeb
+            ? 'Web preview only — real BLE needs an iOS/Android development build.'
+            : 'Needs a development build (expo-dev-client). Expo Go cannot use BLE.'}
         </Text>
       </View>
     </SafeAreaView>
@@ -328,13 +422,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#e8eef2',
     paddingHorizontal: 20,
+    maxWidth: 480,
+    width: '100%',
+    alignSelf: 'center',
   },
   header: {
     paddingTop: 24,
     paddingBottom: 12,
   },
   brand: {
-    fontFamily: Platform.select({ ios: 'AvenirNext-Bold', android: 'sans-serif-condensed', default: 'System' }),
+    fontFamily: Platform.select({
+      ios: 'AvenirNext-Bold',
+      android: 'sans-serif-condensed',
+      web: 'Avenir Next, Segoe UI, sans-serif',
+      default: 'System',
+    }),
     fontSize: 36,
     letterSpacing: 1,
     color: '#0b1f2a',
@@ -441,6 +543,15 @@ const styles = StyleSheet.create({
     color: '#1c3a4a',
     fontSize: 16,
     fontWeight: '600',
+  },
+  demoLink: {
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  demoLinkText: {
+    color: '#3d5a68',
+    fontSize: 14,
+    textDecorationLine: 'underline',
   },
   error: {
     color: '#a11',

@@ -6,8 +6,8 @@ Cooling thermostat on **ESP32-C3-WROOM-02** with a **10 kΩ NTC**, **Thermalrigh
 
 | Function | Board pin | Notes |
 | --- | --- | --- |
-| NTC sense | **GPIO3** | ADC; see divider below |
-| Fan PWM | **GPIO6** | 25 kHz, 3.3 V logic |
+| NTC sense | **GPIO4** | ADC; see divider below |
+| Fan PWM | **GPIO6** | 25 kHz via N-FET (AO3400A); do not wire 5 V PWM to the pin |
 | Fan tach | **GPIO7** | Open-collector, internal pull-up |
 | GND | GND | Must share with 12 V PSU ground |
 
@@ -16,7 +16,7 @@ Cooling thermostat on **ESP32-C3-WROOM-02** with a **10 kΩ NTC**, **Thermalrigh
 ```
 3V3 —— 10k fixed ——●—— NTC 10k —— GND
                    │
-                 GPIO3
+                 GPIO4
 ```
 
 Assume β = 3950 K (change with serial `beta <n>` if needed).
@@ -28,7 +28,7 @@ Assume β = 3950 K (change with serial `beta <n>` if needed).
 | 1 GND | Black | ESP32 GND **and** 12 V PSU GND |
 | 2 +12 V | Yellow | External **12 V** supply (~0.13 A) — **not** USB |
 | 3 Tach | Green | GPIO7 |
-| 4 PWM | Blue | GPIO6 |
+| 4 PWM | pin 4 | AO3400A drain; gate←GPIO6 (+100k to GND), source←GND |
 
 Never put 12 V on ESP32 pins.
 
@@ -113,16 +113,16 @@ Status also prints once per second.
 
 Device name: **`taarm-thermo`**
 
-Base UUID pattern: `a1b2XXXX-c3d4-4e5f-8a9b-0c1d2e3f4a5b`
+Base UUID pattern: `a1b3XXXX-c3d4-4e5f-8a9b-0c1d2e3f4a5b`
 
 | Characteristic | UUID | Format | Access |
 | --- | --- | --- | --- |
-| Service | `a1b20001-…` | — | — |
-| Temperature | `a1b20002-…` | float32 LE °C | read + notify |
-| Setpoint | `a1b20003-…` | float32 LE °C | read + write |
-| Mode | `a1b20004-…` | uint8 `0=auto`, `1=manual` | read + write |
-| Fan duty | `a1b20005-…` | uint8 0–100 | read + write + notify |
-| RPM | `a1b20006-…` | uint16 LE | read + notify |
+| Service | `a1b30001-…` | — | — |
+| Temperature | `a1b30002-…` | float32 LE °C | read + notify |
+| Setpoint | `a1b30003-…` | float32 LE °C | read + write |
+| Mode | `a1b30004-…` | uint8 `0=auto`, `1=manual` | read + write |
+| Fan duty | `a1b30005-…` | uint8 0–100 | read + write + notify |
+| RPM | `a1b30006-…` | uint16 LE | read + notify |
 
 You can exercise the same UUIDs with **nRF Connect** before using the app.
 

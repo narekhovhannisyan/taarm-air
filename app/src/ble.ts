@@ -3,12 +3,12 @@ import { Buffer } from 'buffer';
 export const DEVICE_NAME = 'taarm-thermo';
 
 export const UUIDS = {
-  service: 'a1b20001-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
-  temperature: 'a1b20002-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
-  setpoint: 'a1b20003-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
-  mode: 'a1b20004-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
-  fanDuty: 'a1b20005-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
-  rpm: 'a1b20006-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
+  service: 'a1b30001-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
+  temperature: 'a1b30002-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
+  setpoint: 'a1b30003-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
+  mode: 'a1b30004-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
+  fanDuty: 'a1b30005-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
+  rpm: 'a1b30006-c3d4-4e5f-8a9b-0c1d2e3f4a5b',
 } as const;
 
 export function decodeFloatLE(base64: string | null | undefined): number | null {

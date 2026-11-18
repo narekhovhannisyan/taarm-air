@@ -8,7 +8,7 @@
 ThermostatState gState;
 
 // Pins (ESP32-C3-WROOM-02)
-static constexpr int kPinNtc = 3;    // ADC1_CH3
+static constexpr int kPinNtc = 4;    // ADC1_CH4
 static constexpr int kPinPwm = 6;    // Fan PWM
 static constexpr int kPinTach = 7;   // Fan tach (open-collector)
 
@@ -74,8 +74,11 @@ static void applyFanDuty(uint8_t dutyPercent) {
   if (dutyPercent > 100) {
     dutyPercent = 100;
   }
+  // N-FET open-drain on PWM (e.g. AO3400A): GPIO high = fan PWM low = slower.
+  // Invert so firmware 100% means full fan speed.
+  uint8_t gatePercent = 100 - dutyPercent;
   uint32_t maxDuty = (1u << kPwmResolution) - 1u;
-  uint32_t ticks = (dutyPercent * maxDuty) / 100u;
+  uint32_t ticks = (gatePercent * maxDuty) / 100u;
   ledcWrite(kPinPwm, ticks);
 }
 
@@ -173,6 +176,9 @@ void setup() {
   pinMode(kPinTach, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(kPinTach), onTach, FALLING);
 
+  // Let the 3.3V rail settle before radio init (CH340 regulators often brown out here).
+  delay(1000);
+  Serial.println("starting BLE...");
   bleBegin();
   Serial.printf("BLE advertising as %s\n", BleIds::kDeviceName);
   printStatus();
